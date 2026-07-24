@@ -431,16 +431,16 @@ async def start_1min_video_job(
         "type": "IMAGE_TO_VIDEO",
         "model": "kling",
         "async": True,
-        "promptObject": {
-            "imageUrl": image_path,
-            "prompt": prompt,
-            "modelName": "ray-v2",
-            "duration": normalize_duration(duration),
-            "aspectRatio": normalize_aspect_ratio(
-                aspect_ratio
-            ),
-            "resolution": "720p",
-            "loop": False,
+       "promptObject": {
+    "imageUrl": image_path,
+    "prompt": prompt,
+    "duration": 5,
+    "aspect_ratio": normalize_aspect_ratio(aspect_ratio),
+    "mode": "std",
+    "version": "1.6",
+    "cfg_scale": 0.5,
+    "negative_prompt": "",
+
         },
     }
 
