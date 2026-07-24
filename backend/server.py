@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from PIL import Image
 import asyncio
 import logging
 import mimetypes
@@ -255,11 +255,55 @@ def validate_upload(
 # Cloudinary
 # ============================================================
 
+
 def upload_to_cloudinary(
     path: str,
     data: bytes,
     resource_type: str = "auto",
 ) -> str:
+
+    # Cloudinary's image limit is 10 MB.
+    # Automatically resize and compress large subject images.
+    if resource_type == "image" and len(data) > 9 * 1024 * 1024:
+        try:
+            image = Image.open(BytesIO(data))
+            image = image.convert("RGB")
+
+            # Reduce extremely large image dimensions.
+            image.thumbnail((1920, 1920), Image.LANCZOS)
+
+            compressed = BytesIO()
+
+            quality = 90
+
+            while quality >= 45:
+                compressed.seek(0)
+                compressed.truncate(0)
+
+                image.save(
+                    compressed,
+                    format="JPEG",
+                    quality=quality,
+                    optimize=True,
+                )
+
+                if compressed.tell() < 9 * 1024 * 1024:
+                    break
+
+                quality -= 10
+
+            data = compressed.getvalue()
+
+            logger.info(
+                "Compressed image for Cloudinary: %s bytes",
+                len(data),
+            )
+
+        except Exception as exc:
+            logger.error(
+                "Image compression failed: %s",
+                exc,
+            )
 
     public_id = str(Path(path).with_suffix(""))
 
@@ -278,7 +322,6 @@ def upload_to_cloudinary(
         )
 
     return secure_url
-
 
 async def download_bytes(
     url: str,
