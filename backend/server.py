@@ -430,11 +430,12 @@ async def start_1min_video_job(
     payload = {
         "type": "IMAGE_TO_VIDEO",
         "model": "kling",
+"conversationId": "IMAGE_TO_VIDEO",
         "async": True,
        "promptObject": {
     "imageUrl": image_path,
     "prompt": prompt,
-    "duration": 5,
+    "duration": duration,
     "aspect_ratio": normalize_aspect_ratio(aspect_ratio),
     "mode": "std",
     "version": "1.6",
