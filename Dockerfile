@@ -1,10 +1,10 @@
 # Build stage for frontend
-FROM node:18-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 COPY frontend/package.json ./
-RUN npm install --legacy-peer-deps
+RUN npm ci --legacy-peer-deps
 COPY frontend/ ./
 RUN npm run build
 
@@ -31,4 +31,4 @@ COPY --from=frontend-build /app/frontend/build ./static
 # Expose port
 EXPOSE 8000
 
-CMD uvicorn server:app --host 0.0.0.0 --port $PORT
+CMD uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000}

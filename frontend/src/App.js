@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "@/App.css";
 import axios from "axios";
 
 const getApi = () => `${process.env.REACT_APP_BACKEND_URL || window.location.origin}/api`;
 const LOGO_URL = "/file_00000000bda8720ca0c882cfd8b505ab.png";
+
 
 // ═══════════════════════════════════════════════════════════════════
 // WELCOME PAGE
@@ -12,68 +13,36 @@ function WelcomePage({ onEnter }) {
   const API = getApi();
   const [hasVideo, setHasVideo] = useState(false);
   const [videoSrc, setVideoSrc] = useState("");
-  const [uploading, setUploading] = useState(false);
-
   useEffect(() => {
-  axios
-    .head(`${API}/welcome-video`)
-    .then(() => {
-      setHasVideo(true);
-      setVideoSrc(`${API}/welcome-video?t=${Date.now()}`);
-    })
-    .catch(() => {
-      setHasVideo(false);
-    });
-}, [API]);
-
-
-  const handleUploadWelcome = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    
-    // Check file size (max 50MB)
-    if (file.size > 50 * 1024 * 1024) {
-      alert("Video too large! Please use a video under 50MB.");
-      return;
-    }
-    
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      await axios.post(`${API}/welcome-video`, fd, { timeout: 120000 });
-      setHasVideo(true);
-      setVideoSrc(`${API}/welcome-video?t=${Date.now()}`);
-      alert("Rocco's video uploaded!");
-    } catch (err) {
-      console.error(err);
-      alert("Upload failed. Try a smaller video or check your connection.");
-    } finally { setUploading(false); }
-  };
+    let cancelled = false;
+    axios.head(`${API}/welcome-video`).then(() => {
+      if (!cancelled) { setHasVideo(true); setVideoSrc(`${API}/welcome-video`); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [API]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4" style={{ backgroundColor: "#0A0A0A" }}
          data-testid="welcome-page">
 
       {/* Logo */}
-      {LOGO_URL && (
-  <img src={LOGO_URL} alt="NAUGHTY DAWGZ" className="w-full max-w-2xl mb-6" data-testid="welcome-logo" />
-)}
+      <img src={LOGO_URL} alt="Naughty Dawgz" className="w-full max-w-lg mb-6" data-testid="welcome-logo" />
 
      
       {/* Video */}
-<div className="w-full max-w-lg mb-8">
+{hasVideo && <div className="w-full max-w-lg mb-8">
   <video
-    src={videoSrc || `${API}/welcome-video?t=${Date.now()}`}
+    src={videoSrc}
     autoPlay
     muted
+    controls
     playsInline
     loop
     className="w-full border-2 border-yellow-500 shadow-lg"
     style={{ boxShadow: "0 0 30px rgba(255,215,0,0.3)" }}
     data-testid="welcome-video"
   />
-</div>
+</div>}
 
       {/* Enter Button */}
       <button onClick={onEnter}
@@ -92,103 +61,112 @@ function WelcomePage({ onEnter }) {
 function MainApp() {
   const [subjectFiles, setSubjectFiles] = useState([]);
   const [audioFile, setAudioFile] = useState(null);
-  const [youtubeUrl, setYoutubeUrl] = useState("");
   const [subject, setSubject] = useState("");
   const [clothing, setClothing] = useState("");
   const [actions, setActions] = useState("");
+  const [mood, setMood] = useState("Party");
+  const [dance, setDance] = useState("Cabbage patch");
+  const [audioPreview, setAudioPreview] = useState("");
+  const [audioStart, setAudioStart] = useState(0);
+  const [audioLength, setAudioLength] = useState(0);
+  const audioPlayer = useRef(null);
+  useEffect(() => () => { if (audioPreview) URL.revokeObjectURL(audioPreview); }, [audioPreview]);
   const [uploading, setUploading] = useState(false);
-  const [extracting, setExtracting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [videos, setVideos] = useState([]);
   const [currentVideo, setCurrentVideo] = useState(null);
   const [statusMsg, setStatusMsg] = useState("");
 
   const API = getApi();
+  const pollTimer = useRef(null);
+  const duration = 15;
+  const [aspectRatio, setAspectRatio] = useState("16:9");
+  useEffect(() => () => clearTimeout(pollTimer.current), []);
 
   const loadVideos = useCallback(async () => {
-    try { const r = await axios.get(`${API}/videos`); setVideos(r.data); } catch (e) { console.error(e); }
+    try { const r = await axios.get(`${API}/videos`); setVideos(Array.isArray(r.data) ? r.data : []); } catch (e) { console.error(e); }
   }, [API]);
 
   useEffect(() => { loadVideos(); }, [loadVideos]);
 
   const handleSubjectUpload = async (e) => {
-    const files = Array.from(e.target.files);
+    const files = Array.from(e.target.files).slice(0, 1);
     if (!files.length) return;
     setUploading(true); setStatusMsg("Uploading...");
     try {
       const uploaded = [];
       for (const file of files) {
         const fd = new FormData(); fd.append("file", file);
-        const mt = file.type.startsWith("video/") ? "video" : "image";
+        const mt = "image";
         const r = await axios.post(`${API}/upload-media?media_type=${mt}`, fd);
         uploaded.push(r.data);
       }
-      setSubjectFiles(prev => [...prev, ...uploaded]); setStatusMsg("");
-    } catch (e) { alert("Upload failed."); } finally { setUploading(false); }
+      setSubjectFiles(uploaded); setStatusMsg("");
+    } catch (e) { setStatusMsg(e.response?.data?.detail || "Upload failed. Please try again."); } finally { setUploading(false); }
   };
 
   const handleAudioUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (file.size > 50 * 1024 * 1024) { setStatusMsg("Choose a song under 50 MB."); return; }
     setUploading(true); setStatusMsg("Uploading audio...");
     try {
       const fd = new FormData(); fd.append("file", file);
       const r = await axios.post(`${API}/upload-media?media_type=audio`, fd, { timeout: 120000 });
-      setAudioFile(r.data); setStatusMsg("");
-    } catch (e) { alert("Audio upload failed."); setStatusMsg(""); } finally { setUploading(false); }
-  };
-
-  const handleYouTube = async () => {
-    if (!youtubeUrl.trim()) return;
-    setExtracting(true); setStatusMsg("Extracting from YouTube...");
-    try {
-      const r = await axios.post(`${API}/youtube-audio`, { youtube_url: youtubeUrl.trim() });
-      setAudioFile(r.data); setYoutubeUrl(""); setStatusMsg("");
-      alert(`Song loaded: ${r.data.original_filename}`);
-    } catch (e) {
-      alert("YouTube extraction failed. Check the URL."); setStatusMsg("");
-    } finally { setExtracting(false); }
+      setAudioFile(r.data); setAudioPreview(URL.createObjectURL(file)); setAudioStart(0); setAudioLength(0); setStatusMsg("");
+    } catch (e) { setStatusMsg(e.response?.data?.detail || "Audio upload failed. Please try again."); } finally { setUploading(false); }
   };
 
   const buildPrompt = () => {
     let p = subject.trim() || "The subject";
     if (clothing.trim()) p += `. Wearing ${clothing.trim()}`;
-    if (actions.trim()) p += `. ${actions.trim()}`;
+    p += `. Mood: ${mood}. Perform the ${dance === "Custom" ? actions.trim() : dance} dance`;
+    if (dance !== "Custom" && actions.trim()) p += `. ${actions.trim()}`;
+    p += ". Preserve the subject’s recognizable features. Show the whole subject dancing with expressive movement.";
     return p;
   };
 
   const handleGenerate = async () => {
     if (subjectFiles.length === 0) { alert("Upload at least one subject image"); return; }
-    if (!subject.trim() && !actions.trim()) { alert("Describe who they are or what they should do"); return; }
+    if (!audioFile) { setStatusMsg("Choose a song saved on your phone first."); return; }
     setGenerating(true); setCurrentVideo(null);
     try {
       const r = await axios.post(`${API}/generate-video`, {
         subject_media_ids: subjectFiles.map(f => f.id),
         audio_file_id: audioFile?.id || null,
-        prompt: buildPrompt(), duration: 30
+        prompt: buildPrompt(), duration, aspect_ratio: aspectRatio, audio_start_seconds: audioStart
       });
       setCurrentVideo(r.data); pollStatus(r.data.id);
     } catch (e) { alert(e.response?.data?.detail || "Generation failed"); setGenerating(false); }
   };
 
   const pollStatus = (id) => {
-    const iv = setInterval(async () => {
+    clearTimeout(pollTimer.current);
+    const poll = async () => {
       try {
         const r = await axios.get(`${API}/videos/${id}`);
         setCurrentVideo(r.data);
-        if (r.data.status === "completed" || r.data.status === "failed") { clearInterval(iv); setGenerating(false); loadVideos(); }
-      } catch (e) { clearInterval(iv); setGenerating(false); }
-    }, 5000);
+        if (["completed", "failed"].includes(r.data.status)) {
+          setGenerating(false); loadVideos(); return;
+        }
+        pollTimer.current = setTimeout(poll, 5000);
+      } catch (e) {
+        setGenerating(false);
+        setStatusMsg("Connection interrupted. Select your video in Previous Generations to check it again.");
+        loadVideos();
+      }
+    };
+    pollTimer.current = setTimeout(poll, 5000);
   };
 
   const removeFile = (id) => setSubjectFiles(prev => prev.filter(f => f.id !== id));
-  const canGenerate = !generating && !uploading && !extracting && subjectFiles.length > 0 && (subject.trim() || actions.trim());
+  const canGenerate = !generating && !uploading && subjectFiles.length > 0 && audioFile && (dance !== "Custom" || actions.trim());
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#0A0A0A" }}>
       {/* Header */}
       <div className="p-4 md:p-8 text-center">
-        <img src={LOGO_URL} alt="NAUGHTY DAWGZ" className="mx-auto w-full max-w-md mb-2" data-testid="app-logo" />
+        <h1 className="text-4xl md:text-6xl font-black gold-text mb-2" data-testid="app-logo">Naughty Dawgs</h1>
         <p className="text-sm md:text-base max-w-xl mx-auto" style={{ color: "#999" }}>
           Upload anything. Add music. Describe the drip. Watch AI make it dance.
         </p>
@@ -204,8 +182,8 @@ function MainApp() {
             <div className="neo-card p-4 md:p-5" data-testid="subject-upload-section">
               <h3 className="text-lg md:text-xl font-bold tracking-tight mb-2 gold-text">1. DROP YOUR SUBJECT</h3>
               <label className="upload-zone block p-6 text-center cursor-pointer">
-                <input type="file" multiple accept="image/*,video/*" onChange={handleSubjectUpload}
-                       className="hidden" disabled={uploading} data-testid="subject-file-input" />
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={handleSubjectUpload}
+                       className="hidden" disabled={uploading || generating} data-testid="subject-file-input" />
                 <div className="text-sm font-bold uppercase gold-text">{uploading ? "UPLOADING..." : "TAP TO UPLOAD"}</div>
                 <div className="text-xs mt-1" style={{ color: "#888" }}>Dogs, humans, aliens, washing machines</div>
               </label>
@@ -229,10 +207,10 @@ function MainApp() {
 
               {/* Primary: Upload audio file */}
               <label className="upload-zone block p-6 text-center cursor-pointer mb-3">
-                <input type="file" accept="audio/*,video/*" onChange={handleAudioUpload} className="hidden" disabled={uploading}
+                <input type="file" accept="audio/*" onChange={handleAudioUpload} className="hidden" disabled={uploading || generating}
                        data-testid="audio-file-input" />
-                <div className="text-sm font-bold uppercase gold-text">{audioFile ? audioFile.original_filename : "TAP TO UPLOAD YOUR SONG"}</div>
-                <div className="text-xs mt-1" style={{ color: "#888" }}>MP3, M4A, or any audio/video file from your phone</div>
+                <div className="text-sm font-bold uppercase gold-text">{audioFile ? audioFile.original_filename : "CHOOSE A SONG FROM YOUR PHONE"}</div>
+                <div className="text-xs mt-1" style={{ color: "#888" }}>MP3, M4A, WAV, or other audio from your phone</div>
               </label>
 
                {/* Secondary: Pixabay free music */}
@@ -266,6 +244,14 @@ function MainApp() {
   </div>
 </div> 
 
+              {audioPreview && <div className="mt-3">
+                <audio ref={audioPlayer} controls src={audioPreview} className="w-full"
+                  onLoadedMetadata={e => setAudioLength(Number.isFinite(e.target.duration) ? e.target.duration : 0)} />
+                <label className="block gold-text text-sm mt-3" htmlFor="song-start">Start song at {audioStart.toFixed(1)} seconds</label>
+                <input id="song-start" type="range" min="0" max={Math.max(0, audioLength - 15)} step="0.1" value={audioStart}
+                  disabled={generating} className="w-full" onChange={e => { const t = Number(e.target.value); setAudioStart(t); if (audioPlayer.current) audioPlayer.current.currentTime = t; }} />
+                <p className="text-xs text-gray-400">Pick a 15-second section. Choose an audio file saved on your device; offline downloads inside streaming apps may not appear here.</p>
+              </div>}
               {audioFile && (
                 <div className="mt-2 p-2 border border-green-700 text-xs font-bold" style={{ backgroundColor: "rgba(0,128,0,0.15)", color: "#4ADE80" }}
                      data-testid="audio-loaded">
@@ -278,25 +264,43 @@ function MainApp() {
             <div className="neo-card p-4 md:p-5" data-testid="prompt-section">
               <h3 className="text-lg md:text-xl font-bold tracking-tight mb-2 gold-text">3. DESCRIBE THE VIBE</h3>
 
-              <label className="block text-xs font-bold uppercase mb-1 gold-text">Who / What?</label>
-              <input type="text" value={subject} onChange={e => setSubject(e.target.value)}
+              <label htmlFor="subject" className="block text-xs font-bold uppercase mb-1 gold-text">Who / What?</label>
+              <input id="subject" type="text" maxLength={500} value={subject} onChange={e => setSubject(e.target.value)}
                      placeholder="Three pit bulls, a washing machine, two aliens..."
                      className="w-full px-3 py-2 text-sm border-2 border-gray-600 focus:border-yellow-500 focus:outline-none mb-3 bg-black text-white"
                      disabled={generating} data-testid="subject-input" />
 
-              <label className="block text-xs font-bold uppercase mb-1 gold-text">Clothing / Jewelry / Grills</label>
-              <input type="text" value={clothing} onChange={e => setClothing(e.target.value)}
+              <label htmlFor="clothing" className="block text-xs font-bold uppercase mb-1 gold-text">Clothing / Jewelry / Grills</label>
+              <input id="clothing" type="text" maxLength={500} value={clothing} onChange={e => setClothing(e.target.value)}
                      placeholder="Baggy jeans, Alabama jerseys, iced out chains, platinum grills..."
                      className="w-full px-3 py-2 text-sm border-2 border-gray-600 focus:border-yellow-500 focus:outline-none mb-3 bg-black text-white"
                      disabled={generating} data-testid="clothing-input" />
 
-              <label className="block text-xs font-bold uppercase mb-1 gold-text">Dance Style / Actions</label>
-              <textarea value={actions} onChange={e => setActions(e.target.value)}
+              <label className="block gold-text text-sm mb-3">Mood / Vibe
+                <select aria-label="Mood" value={mood} disabled={generating} onChange={e => setMood(e.target.value)} className="block w-full p-2 bg-black text-white border border-gray-600">
+                  {["Party", "Funny", "Confident", "Chill", "Energetic", "Dramatic"].map(v => <option key={v}>{v}</option>)}
+                </select>
+              </label>
+              <label className="block gold-text text-sm mb-3">Choose your dance
+                <select aria-label="Dance" value={dance} disabled={generating} onChange={e => setDance(e.target.value)} className="block w-full p-2 bg-black text-white border border-gray-600">
+                  {["Cabbage patch", "Dougie", "Crip walk", "Moonwalk", "Freestyle", "Custom"].map(v => <option key={v}>{v}</option>)}
+                </select>
+              </label>
+              <label htmlFor="dance-details" className="block text-xs font-bold uppercase mb-1 gold-text">Extra dance details {dance === "Custom" ? "(required)" : "(optional)"}</label>
+              <textarea id="dance-details" maxLength={1000} value={actions} onChange={e => setActions(e.target.value)}
                         placeholder="Grunge dancing with beer in one hand and blunt in the other..."
                         className="w-full px-3 py-2 text-sm border-2 border-gray-600 focus:border-yellow-500 focus:outline-none bg-black text-white"
                         style={{ minHeight: "70px" }} disabled={generating} data-testid="actions-input" />
             </div>
 
+            <div className="neo-card p-4 flex flex-wrap gap-4">
+              <p className="gold-text text-sm">15-second dance video</p>
+              <label className="gold-text text-sm">Format
+                <select aria-label="Video format" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} disabled={generating} className="block bg-black text-white p-2 border border-gray-600">
+                  <option value="16:9">Landscape</option><option value="9:16">Portrait</option><option value="1:1">Square</option>
+                </select>
+              </label>
+            </div>
             {/* Generate */}
             <button onClick={handleGenerate} disabled={!canGenerate}
                     className="neo-button w-full px-6 py-4 text-lg font-black uppercase tracking-wide border-2"
@@ -304,9 +308,9 @@ function MainApp() {
                              borderColor: "#FFD700", boxShadow: "4px 4px 0 #333",
                              cursor: canGenerate ? "pointer" : "not-allowed" }}
                     data-testid="generate-button">
-              {generating ? "GENERATING... (2-5 MIN)" : "GENERATE VIDEO"}
+              {generating ? "GENERATING..." : "GENERATE 15-SECOND VIDEO"}
             </button>
-            {statusMsg && <p className="text-center text-xs font-bold gold-text" data-testid="status-msg">{statusMsg}</p>}
+            {statusMsg && <p className="text-center text-xs font-bold gold-text" role="status" data-testid="status-msg">{statusMsg}</p>}
           </div>
 
           {/* RIGHT COLUMN */}
@@ -320,15 +324,15 @@ function MainApp() {
                 </div>
               )}
 
-              {currentVideo && currentVideo.status === "generating" && (
+              {currentVideo && ["uploading_to_1min", "generating", "adding_music", "saving"].includes(currentVideo.status) && (
                 <div className="p-8 border-2 border-yellow-500 text-center" style={{ backgroundColor: "rgba(255,215,0,0.08)" }}
                      data-testid="generating-status">
                   <div className="overflow-hidden">
                     <div className="marquee text-base font-bold uppercase gold-text">
-                      GENERATING... CHOREOGRAPHING... STYLING...
+                      {currentVideo.status === "generating" ? "Animating your dance" : currentVideo.status.replaceAll("_", " ")}
                     </div>
                   </div>
-                  <p className="mt-3 text-xs" style={{ color: "#999" }}>2-5 minutes. Don't close the page.</p>
+                  <p className="mt-3 text-xs" style={{ color: "#999" }}>Your dance is being animated, then combined with your song. This may take several minutes.</p>
                 </div>
               )}
 
@@ -340,7 +344,8 @@ function MainApp() {
 
               {currentVideo && currentVideo.status === "completed" && (
                 <div data-testid="completed-video">
-                  <video controls className="video-player" src={`${API}/video-file/${currentVideo.id}`} data-testid="video-player" />
+                  <video controls className="video-player" src={`${API}/videos/${currentVideo.id}/content`} data-testid="video-player" />
+                  <a className="inline-block mt-3 gold-text underline" href={`${API}/videos/${currentVideo.id}/content`} target="_blank" rel="noopener noreferrer">Open video to save ↗</a>
                   <div className="mt-3 p-3 border border-green-700" style={{ backgroundColor: "rgba(0,128,0,0.15)" }}>
                     <p className="font-bold text-sm" style={{ color: "#4ADE80" }}>VIDEO COMPLETE!</p>
                     <p className="text-xs mt-1" style={{ color: "#999" }}>{currentVideo.prompt}</p>
@@ -364,7 +369,7 @@ function MainApp() {
                 <div className="space-y-2">
                   {videos.slice(0, 8).map(v => (
                     <div key={v.id} className="p-2 border border-gray-700 cursor-pointer hover:border-yellow-500 transition-colors"
-                         onClick={() => setCurrentVideo(v)} data-testid={`video-history-${v.id}`}>
+                         onClick={() => { clearTimeout(pollTimer.current); setCurrentVideo(v); const active = !["completed", "failed"].includes(v.status); setGenerating(active); if (active) pollStatus(v.id); }} data-testid={`video-history-${v.id}`}>
                       <div className="flex justify-between items-start">
                         <p className="text-xs flex-1" style={{ color: "#CCC" }}>{v.prompt.substring(0, 50)}...</p>
                         <span className="px-2 py-0.5 text-xs font-bold ml-2"
