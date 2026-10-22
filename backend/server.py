@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 import cloudinary
 import cloudinary.uploader
@@ -42,64 +42,23 @@ ALLOWED_VIDEO_EXTENSIONS = {"mp4", "mov", "m4v", "webm"}
 
 # Main app setup
 app = FastAPI(
-    title="Naughty Dawgz API",
+    title="Naughty Dawgs API",
     version="2.0.0",
 )
 
-# 🔧 FIX 1: ADD CORS MIDDLEWARE
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 🔧 FIX 2: API ROUTES (critical for uploads!)
-api_router = APIRouter(prefix="/api")
-
-@api_router.post("/upload")
-async def upload_media(
-    file: UploadFile = File(...),
-    music: UploadFile = File(...),
-    prompt: str = Query(...),
-    duration: int = 10,
-    aspect_ratio: str = "16:9",
-):
-    try:
-        # ✅ VALIDATE FILE SIZE/TYPE (your existing logic)
-        if file.size > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, "File too large (max 50MB)")
-        if file_extension(file.filename) not in ALLOWED_IMAGE_EXTENSIONS:
-            raise HTTPException(400, "Invalid image format")
-
-        # ✅ ADD YOUR EXISTING UPLOAD LOGIC HERE (e.g., upload_to_cloudinary)
-        # (Don’t delete your custom code—keep it below this block!)
-
-        return {"status": "success", "file": file.filename}
-    except Exception as e:
-        logger.error("Upload failed: %s", e)
-        raise HTTPException(500, "Internal error")
-
-@api_router.get("/videos")
-async def get_videos():
-    # ✅ ADD YOUR EXISTING MONGODB LOGIC HERE
-    # (Don’t delete your custom code—keep it below this block!)
-
-    return {"videos": [{"url": "example.com/video1.mp4"}]}
-
-# 🔧 ADD YOUR OTHER ROUTES (e.g., /welcome-video)
-@api_router.post("/welcome-video")
-async def upload_welcome_video(...):
-    # ... (your existing logic)
-    return {"status": "success"}
-
-# ... (rest of your code—keep all existing functions below this)
-
-    title="Naughty Dawgz API",
-    version="2.0.0",
-)
-
+# Keep environment names compatible with the existing deployment.
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+DB_NAME = os.getenv("DB_NAME", "dogs_music_parody")
+ONE_MIN_AI_API_KEY = os.getenv("ONE_MIN_AI_API_KEY", "")
+mongo_client = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+db = mongo_client[DB_NAME]
+cloudinary.config(secure=True)  # Reads CLOUDINARY_URL when configured.
+if not os.getenv("CLOUDINARY_URL"):
+    cloudinary.config(
+        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+        api_key=os.getenv("CLOUDINARY_API_KEY"),
+        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    )
 api_router = APIRouter(prefix="/api")
 
 
@@ -129,11 +88,12 @@ class MediaUpload(BaseModel):
 
 
 class GenerateVideoRequest(BaseModel):
-    subject_media_ids: List[str]
+    subject_media_ids: List[str] = Field(min_length=1, max_length=1)
     audio_file_id: Optional[str] = None
-    prompt: str
-    duration: int = 10
-    aspect_ratio: str = "16:9"
+    prompt: str = Field(min_length=1, max_length=2500)
+    duration: Literal[15] = 15
+    audio_start_seconds: float = Field(default=0, ge=0, le=86400)
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
 
 
 class VideoGeneration(BaseModel):
@@ -146,7 +106,8 @@ class VideoGeneration(BaseModel):
     subject_media_ids: List[str]
     audio_file_id: Optional[str] = None
     prompt: str
-    duration: int = 10
+    duration: int = 15
+    audio_start_seconds: float = 0
     aspect_ratio: str = "16:9"
 
     status: str = "pending"
@@ -393,23 +354,8 @@ async def upload_image_to_1min(
     return asset_path
 
 
-def normalize_duration(duration: int) -> str:
-    if duration >= 10:
-        return "10s"
-
-    return "5s"
-
-
 def normalize_aspect_ratio(value: str) -> str:
-    allowed = {
-        "1:1",
-        "16:9",
-        "9:16",
-        "4:3",
-        "3:4",
-        "21:9",
-        "9:21",
-    }
+    allowed = {"1:1", "16:9", "9:16"}
 
     if value in allowed:
         return value
@@ -432,18 +378,16 @@ async def start_1min_video_job(
     payload = {
         "type": "IMAGE_TO_VIDEO",
         "model": "kling",
-"conversationId": "IMAGE_TO_VIDEO",
+        "conversationId": "IMAGE_TO_VIDEO",
         "async": True,
-       "promptObject": {
-    "imageUrl": image_path,
-    "prompt": prompt,
-    "duration": duration,
-    "aspect_ratio": normalize_aspect_ratio(aspect_ratio),
-    "mode": "std",
-    "version": "1.6",
-    "cfg_scale": 0.5,
-    "negative_prompt": "",
-
+        "promptObject": {
+            "imageUrl": image_path,
+            "prompt": prompt,
+            "duration": duration,
+            "aspect_ratio": normalize_aspect_ratio(aspect_ratio),
+            "mode": "std",
+            "version": "3.0",
+            "negative_prompt": "",
         },
     }
 
@@ -587,6 +531,7 @@ async def merge_music(
     video_data: bytes,
     audio_data: bytes,
     audio_ext: str,
+    start_seconds: float = 0,
 ) -> bytes:
 
     if not shutil.which("ffmpeg"):
@@ -610,6 +555,8 @@ async def merge_music(
             "-y",
             "-i",
             str(video_path),
+            "-ss",
+            str(start_seconds),
             "-i",
             str(audio_path),
             "-map",
@@ -622,6 +569,8 @@ async def merge_music(
             "aac",
             "-b:a",
             "192k",
+            "-af",
+            "apad",
             "-shortest",
             "-movflags",
             "+faststart",
@@ -730,35 +679,14 @@ async def generate_video_background(
             image_data,
         )
 
-        await set_video_status(
-            video_id,
-            "generating",
-        )
-
+        await set_video_status(video_id, "generating")
         provider_job_id = await start_1min_video_job(
-            image_path=image_path,
-            prompt=record["prompt"],
-            duration=record.get("duration", 10),
-            aspect_ratio=record.get(
-                "aspect_ratio",
-                "16:9",
-            ),
+            image_path=image_path, prompt=record["prompt"], duration=15,
+            aspect_ratio=record.get("aspect_ratio", "16:9"),
         )
-
-        await set_video_status(
-            video_id,
-            "generating",
-            provider_job_id=provider_job_id,
-        )
-
-        generated_url = await wait_for_1min_video(
-            provider_job_id
-        )
-
-        video_data = await download_bytes(
-            generated_url,
-            timeout=300.0,
-        )
+        await set_video_status(video_id, "generating", provider_job_id=provider_job_id)
+        generated_url = await wait_for_1min_video(provider_job_id)
+        video_data = await download_bytes(generated_url, timeout=300.0)
 
         audio_file_id = record.get(
             "audio_file_id"
@@ -799,6 +727,7 @@ async def generate_video_background(
                         "original_filename"
                     )
                 ),
+                start_seconds=record.get("audio_start_seconds", 0),
             )
 
         await set_video_status(
@@ -806,7 +735,8 @@ async def generate_video_background(
             "saving",
         )
 
-        video_url = upload_to_cloudinary(
+        video_url = await asyncio.to_thread(
+            upload_to_cloudinary,
             f"{APP_NAME}/videos/{video_id}.mp4",
             video_data,
             resource_type="video",
@@ -843,7 +773,7 @@ async def generate_video_background(
 async def api_root() -> dict:
     return {
         "message": (
-            "NAUGHTY DAWGZ - "
+            "NAUGHTY DAWGS - "
             "AN ODB PRODUCTION API"
         ),
         "version": "2.0.0",
@@ -881,7 +811,7 @@ async def upload_media(
     media_type: str = Query(...),
 ) -> MediaUpload:
 
-    data = await file.read()
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
 
     normalized_type = validate_upload(
         file.filename,
@@ -915,7 +845,8 @@ async def upload_media(
     else:
         resource_type = "auto"
 
-    storage_path = upload_to_cloudinary(
+    storage_path = await asyncio.to_thread(
+        upload_to_cloudinary,
         (
             f"{APP_NAME}/uploads/"
             f"{media_id}.{ext}"
@@ -976,7 +907,7 @@ async def upload_welcome_video(
     file: UploadFile = File(...),
 ) -> MediaUpload:
 
-    data = await file.read()
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
 
     validate_upload(
         file.filename,
@@ -1000,7 +931,8 @@ async def upload_welcome_video(
     media_id = str(uuid.uuid4())
     ext = file_extension(file.filename) or "mp4"
 
-    storage_path = upload_to_cloudinary(
+    storage_path = await asyncio.to_thread(
+        upload_to_cloudinary,
         (
             f"{APP_NAME}/welcome/"
             f"{media_id}.{ext}"
@@ -1031,6 +963,7 @@ async def upload_welcome_video(
     return upload
 
 
+@api_router.head("/welcome-video")
 @api_router.get("/welcome-video")
 async def get_welcome_video():
 
@@ -1075,6 +1008,20 @@ async def generate_video(
             detail="Upload a subject image first.",
         )
 
+    if not ONE_MIN_AI_API_KEY:
+        raise HTTPException(503, "Video generation is not configured on this server.")
+    subject = await db.media_uploads.find_one({
+        "id": request.subject_media_ids[0], "media_type": "image", "is_deleted": False,
+    })
+    if not subject:
+        raise HTTPException(404, "The selected subject image was not found.")
+    if request.audio_file_id:
+        audio = await db.media_uploads.find_one({
+            "id": request.audio_file_id, "media_type": "audio", "is_deleted": False,
+        })
+        if not audio:
+            raise HTTPException(404, "The selected music file was not found.")
+
     generation = VideoGeneration(
         subject_media_ids=(
             request.subject_media_ids
@@ -1082,6 +1029,7 @@ async def generate_video(
         audio_file_id=request.audio_file_id,
         prompt=prompt,
         duration=request.duration,
+        audio_start_seconds=request.audio_start_seconds,
         aspect_ratio=normalize_aspect_ratio(
             request.aspect_ratio
         ),
@@ -1098,6 +1046,12 @@ async def generate_video(
     )
 
     return generation
+
+
+@api_router.get("/videos", response_model=List[VideoGeneration])
+async def list_videos() -> List[VideoGeneration]:
+    records = await db.video_generations.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return [VideoGeneration(**record) for record in records]
 
 
 @api_router.get(
@@ -1122,6 +1076,7 @@ async def get_video_status(
     return VideoGeneration(**record)
 
 
+@api_router.get("/video-file/{video_id}", include_in_schema=False)
 @api_router.get(
     "/videos/{video_id}/content"
 )
