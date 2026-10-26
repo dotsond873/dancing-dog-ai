@@ -981,9 +981,11 @@ async def get_welcome_video():
             detail="No welcome video uploaded.",
         )
 
-    return RedirectResponse(
-        record["storage_path"]
-    )
+    video_url = record["storage_path"]
+    # Cloudinary converts legacy phone recordings to browser-compatible MP4.
+    if video_url.startswith("https://res.cloudinary.com/") and video_url.lower().endswith(".3gp"):
+        video_url = video_url[:-4] + ".mp4"
+    return RedirectResponse(video_url)
 
 
 @api_router.post(
