@@ -1,5 +1,6 @@
 from __future__ import annotations
 from PIL import Image
+import json
 import asyncio
 import logging
 import mimetypes
@@ -32,7 +33,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("dogs-music-parody")
 
 APP_NAME = "dogs-music-parody"
-ONE_MIN_BASE_URL = "https://api.1min.ai"
+HF_SPACE_URL = "https://kulkas2pintu-wan777.hf.space"
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -91,7 +93,7 @@ class GenerateVideoRequest(BaseModel):
     subject_media_ids: List[str] = Field(min_length=1, max_length=1)
     audio_file_id: Optional[str] = None
     prompt: str = Field(min_length=1, max_length=2500)
-    duration: Literal[15] = 15
+    duration: Literal[3] = 3
     audio_start_seconds: float = Field(default=0, ge=0, le=86400)
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = "16:9"
 
@@ -303,224 +305,48 @@ async def download_bytes(
 
 
 # ============================================================
-# 1min.AI
+# Hugging Face Wan
 # ============================================================
 
-async def upload_image_to_1min(
-    filename: str,
-    content_type: str,
-    image_data: bytes,
-) -> str:
-
-    headers = {
-        "API-KEY": ONE_MIN_AI_API_KEY,
-    }
-
-    files = {
-        "asset": (
-            filename,
-            image_data,
-            content_type,
-        )
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{ONE_MIN_BASE_URL}/api/assets",
-            headers=headers,
-            files=files,
-        )
-
-    if response.status_code >= 400:
-        raise RuntimeError(
-            "1min.AI image upload failed "
-            f"({response.status_code}): "
-            f"{response.text[:500]}"
-        )
-
-    payload = response.json()
-
-    asset_path = (
-        payload.get("fileContent", {}).get("path")
-        or payload.get("asset", {}).get("key")
-    )
-
-    if not asset_path:
-        raise RuntimeError(
-            "1min.AI did not return an asset path: "
-            f"{payload}"
-        )
-
-    return asset_path
-
-
 def normalize_aspect_ratio(value: str) -> str:
-    allowed = {"1:1", "16:9", "9:16"}
-
-    if value in allowed:
-        return value
-
-    return "16:9"
+    return value if value in {"1:1", "16:9", "9:16"} else "16:9"
 
 
-async def start_1min_video_job(
-    image_path: str,
-    prompt: str,
-    duration: int,
-    aspect_ratio: str,
-) -> str:
-
-    headers = {
-        "API-KEY": ONE_MIN_AI_API_KEY,
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "type": "IMAGE_TO_VIDEO",
-        "model": "kling",
-        "conversationId": "IMAGE_TO_VIDEO",
-        "async": True,
-        "promptObject": {
-            "imageUrl": image_path,
-            "prompt": prompt,
-            "duration": duration,
-            "aspect_ratio": normalize_aspect_ratio(aspect_ratio),
-            "mode": "std",
-            "version": "3.0",
-            "negative_prompt": "",
-        },
-    }
-
-    async with httpx.AsyncClient(
-        timeout=120.0
-    ) as client:
-
+async def generate_wan_video(image_url: str, prompt: str, duration: int) -> str:
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    data = [
+        {"path": image_url, "meta": {"_type": "gradio.FileData"}},
+        None, prompt, 4, "", duration, 1, 1, 42, True,
+        6, "UniPCMultistep", 3, 16, True, True,
+    ]
+    async with httpx.AsyncClient(timeout=900.0, follow_redirects=True, headers=headers) as client:
         response = await client.post(
-            f"{ONE_MIN_BASE_URL}/api/features",
-            headers=headers,
-            json=payload,
+            f"{HF_SPACE_URL}/gradio_api/call/generate_video", json={"data": data}
         )
-
-    if response.status_code >= 400:
-        raise RuntimeError(
-            "1min.AI generation request failed "
-            f"({response.status_code}): "
-            f"{response.text[:500]}"
-        )
-
-    result = response.json()
-    record = result.get("aiRecord") or {}
-
-    job_id = (
-        record.get("uuid")
-        or result.get("uuid")
-    )
-
-    if not job_id:
-        raise RuntimeError(
-            "1min.AI did not return a job ID: "
-            f"{result}"
-        )
-
-    return job_id
-
-
-async def wait_for_1min_video(
-    job_id: str,
-) -> str:
-
-    headers = {
-        "API-KEY": ONE_MIN_AI_API_KEY,
-    }
-
-    async with httpx.AsyncClient(
-        timeout=60.0,
-        follow_redirects=True,
-    ) as client:
-
-        for _ in range(90):
-
-            response = await client.get(
-                f"{ONE_MIN_BASE_URL}/api/results/{job_id}",
-                headers=headers,
-            )
-
-            response.raise_for_status()
-
-            payload = response.json()
-            record = payload.get("aiRecord")
-
-            if not record:
-                raise RuntimeError(
-                    "1min.AI returned an unknown job ID."
-                )
-
-            status = str(
-                record.get("status", "")
-            ).upper()
-
-            if status == "SUCCESS":
-                temporary_url = record.get(
-                    "temporaryUrl"
-                )
-
-                if temporary_url:
-                    return temporary_url
-
-                result_object = (
-                    record
-                    .get("aiRecordDetail", {})
-                    .get("resultObject")
-                    or []
-                )
-
-                if (
-                    isinstance(result_object, list)
-                    and result_object
-                ):
-                    first_result = result_object[0]
-
-                    if (
-                        isinstance(first_result, str)
-                        and first_result.startswith("http")
-                    ):
-                        return first_result
-
-                raise RuntimeError(
-                    "1min.AI completed but returned "
-                    "no download URL."
-                )
-
-            if status in {
-                "FAILURE",
-                "FAILED",
-                "ERROR",
-            }:
-                error_result = (
-                    record
-                    .get("aiRecordDetail", {})
-                    .get("resultObject")
-                )
-
-                if isinstance(error_result, dict):
-                    message = (
-                        error_result.get("message")
-                        or str(error_result)
-                    )
-                else:
-                    message = str(
-                        error_result
-                        or "Unknown 1min.AI error"
-                    )
-
-                raise RuntimeError(message)
-
-            await asyncio.sleep(10)
-
-    raise RuntimeError(
-        "1min.AI video generation timed out "
-        "after 15 minutes."
-    )
+        response.raise_for_status()
+        event_id = response.json().get("event_id")
+        if not event_id:
+            raise RuntimeError("The video generator did not return a job ID.")
+        async with client.stream(
+            "GET", f"{HF_SPACE_URL}/gradio_api/call/generate_video/{event_id}"
+        ) as stream:
+            stream.raise_for_status()
+            event = ""
+            async for line in stream.aiter_lines():
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    payload = json.loads(line[5:].strip())
+                    if event == "error":
+                        message = str(payload or "The shared generator is busy or its daily GPU quota is exhausted. Try again later.")
+                        raise RuntimeError(message[:700])
+                    if event == "complete":
+                        if isinstance(payload, list) and len(payload) > 1 and isinstance(payload[1], dict):
+                            url = payload[1].get("url")
+                            if url and url.startswith(HF_SPACE_URL + "/"):
+                                return url
+                        raise RuntimeError("The generator finished without a video download.")
+    raise RuntimeError("The shared video generator timed out. Try again later.")
 
 
 # ============================================================
@@ -658,34 +484,10 @@ async def generate_video_background(
                 "was not found."
             )
 
-        await set_video_status(
-            video_id,
-            "uploading_to_1min",
-        )
-
-        image_data = await download_bytes(
-            subject["storage_path"]
-        )
-
-        image_path = await upload_image_to_1min(
-            subject.get(
-                "original_filename",
-                "subject.jpg",
-            ),
-            subject.get(
-                "content_type",
-                "image/jpeg",
-            ),
-            image_data,
-        )
-
         await set_video_status(video_id, "generating")
-        provider_job_id = await start_1min_video_job(
-            image_path=image_path, prompt=record["prompt"], duration=15,
-            aspect_ratio=record.get("aspect_ratio", "16:9"),
+        generated_url = await generate_wan_video(
+            subject["storage_path"], record["prompt"], record["duration"]
         )
-        await set_video_status(video_id, "generating", provider_job_id=provider_job_id)
-        generated_url = await wait_for_1min_video(provider_job_id)
         video_data = await download_bytes(generated_url, timeout=300.0)
 
         audio_file_id = record.get(
@@ -777,7 +579,7 @@ async def api_root() -> dict:
             "AN ODB PRODUCTION API"
         ),
         "version": "2.0.0",
-        "video_provider": "1min.AI",
+        "video_provider": "Hugging Face Wan",
     }
 
 
@@ -1010,8 +812,6 @@ async def generate_video(
             detail="Upload a subject image first.",
         )
 
-    if not ONE_MIN_AI_API_KEY:
-        raise HTTPException(503, "Video generation is not configured on this server.")
     subject = await db.media_uploads.find_one({
         "id": request.subject_media_ids[0], "media_type": "image", "is_deleted": False,
     })
