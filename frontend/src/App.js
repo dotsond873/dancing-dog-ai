@@ -213,17 +213,17 @@ function MainApp() {
                 <div className="text-xs mt-1" style={{ color: "#888" }}>MP3, M4A, WAV, or other audio from your phone</div>
               </label>
 
-               {/* Secondary: Pixabay free music */}
+               {/* Secondary: Mobiles24 ringtone downloads */}
 <div className="text-center mt-4">
   <div
     className="text-center text-xs font-bold mb-2"
     style={{ color: "#666" }}
   >
-    OR FIND FREE MUSIC
+    OR FIND A RINGTONE
   </div>
 
   <a
-    href="https://pixabay.com/music/"
+    href="https://www.mobiles24.co/"
     target="_blank"
     rel="noopener noreferrer"
     className="inline-block w-full px-4 py-3 text-sm font-black uppercase border-2 border-yellow-500"
@@ -233,14 +233,14 @@ function MainApp() {
       textDecoration: "none"
     }}
   >
-    BROWSE PIXABAY MUSIC
+    BROWSE MOBILES24 RINGTONES
   </a>
 
   <div
     className="text-center text-xs mt-2"
     style={{ color: "#666" }}
   >
-    Download an MP3, then upload it above.
+    Download a ringtone to your phone, then return here and upload it above.
   </div>
 </div> 
 
