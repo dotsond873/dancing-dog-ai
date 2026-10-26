@@ -79,7 +79,7 @@ function MainApp() {
 
   const API = getApi();
   const pollTimer = useRef(null);
-  const duration = 15;
+  const duration = 3;
   const [aspectRatio, setAspectRatio] = useState("16:9");
   useEffect(() => () => clearTimeout(pollTimer.current), []);
 
@@ -248,9 +248,9 @@ function MainApp() {
                 <audio ref={audioPlayer} controls src={audioPreview} className="w-full"
                   onLoadedMetadata={e => setAudioLength(Number.isFinite(e.target.duration) ? e.target.duration : 0)} />
                 <label className="block gold-text text-sm mt-3" htmlFor="song-start">Start song at {audioStart.toFixed(1)} seconds</label>
-                <input id="song-start" type="range" min="0" max={Math.max(0, audioLength - 15)} step="0.1" value={audioStart}
+                <input id="song-start" type="range" min="0" max={Math.max(0, audioLength - 3)} step="0.1" value={audioStart}
                   disabled={generating} className="w-full" onChange={e => { const t = Number(e.target.value); setAudioStart(t); if (audioPlayer.current) audioPlayer.current.currentTime = t; }} />
-                <p className="text-xs text-gray-400">Pick a 15-second section. Choose an audio file saved on your device; offline downloads inside streaming apps may not appear here.</p>
+                <p className="text-xs text-gray-400">Pick a 3-second section. Choose an audio file saved on your device; offline downloads inside streaming apps may not appear here.</p>
               </div>}
               {audioFile && (
                 <div className="mt-2 p-2 border border-green-700 text-xs font-bold" style={{ backgroundColor: "rgba(0,128,0,0.15)", color: "#4ADE80" }}
@@ -294,12 +294,8 @@ function MainApp() {
             </div>
 
             <div className="neo-card p-4 flex flex-wrap gap-4">
-              <p className="gold-text text-sm">15-second dance video</p>
-              <label className="gold-text text-sm">Format
-                <select aria-label="Video format" value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} disabled={generating} className="block bg-black text-white p-2 border border-gray-600">
-                  <option value="16:9">Landscape</option><option value="9:16">Portrait</option><option value="1:1">Square</option>
-                </select>
-              </label>
+              <p className="gold-text text-sm">3-second dance video</p>
+              <p className="text-xs text-gray-400">Video follows your photo’s shape. Shared AI has daily limits and queues.</p>
             </div>
             {/* Generate */}
             <button onClick={handleGenerate} disabled={!canGenerate}
@@ -308,7 +304,7 @@ function MainApp() {
                              borderColor: "#FFD700", boxShadow: "4px 4px 0 #333",
                              cursor: canGenerate ? "pointer" : "not-allowed" }}
                     data-testid="generate-button">
-              {generating ? "GENERATING..." : "GENERATE 15-SECOND VIDEO"}
+              {generating ? "GENERATING..." : "GENERATE 3-SECOND VIDEO"}
             </button>
             {statusMsg && <p className="text-center text-xs font-bold gold-text" role="status" data-testid="status-msg">{statusMsg}</p>}
           </div>
